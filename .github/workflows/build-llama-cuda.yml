@@ -46,6 +46,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_CUDA=ON \
             -DCMAKE_CUDA_ARCHITECTURES=75 \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" \
+            -DLLAMA_BUILD_TESTS=OFF \
             -DGGML_CCACHE=OFF \
             -DLLAMA_CURL=OFF
 

@@ -1,0 +1,109 @@
+name: Build llama.cpp Vulkan for Intel Iris Xe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 7071ba378afa96dcd69c41e1ec2b4912364dbee4
+          path: llama.cpp
+          fetch-depth: 1
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkPath = $env:VULKAN_SDK
+          if (-not $sdkPath -or -not (Test-Path (Join-Path $sdkPath 'Include\vulkan\vulkan.h'))) {
+            winget install --id KhronosGroup.VulkanSDK --version 1.4.309.0 --exact --silent --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -ne 0) { throw "Vulkan SDK installation failed with exit code $LASTEXITCODE" }
+            $sdkRoot = Join-Path $env:ProgramFiles 'VulkanSDK'
+            $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            if (-not $sdk) { throw "Vulkan SDK was not found under $sdkRoot" }
+            $sdkPath = $sdk.FullName
+          }
+          if (-not (Test-Path (Join-Path $sdkPath 'Include\vulkan\vulkan.h'))) {
+            throw "Vulkan headers not found under $sdkPath"
+          }
+          if (-not (Test-Path (Join-Path $sdkPath 'Bin\glslc.exe'))) {
+            throw "Vulkan SDK glslc not found under $sdkPath"
+          }
+          "VULKAN_SDK=$sdkPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          (Join-Path $sdkPath 'Bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "Using Vulkan SDK at $sdkPath"
+
+      - name: Configure Vulkan build
+        shell: pwsh
+        working-directory: llama.cpp
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $args = @(
+            '-S', '.',
+            '-B', 'build',
+            '-G', 'Visual Studio 17 2022',
+            '-A', 'x64',
+            '-DCMAKE_BUILD_TYPE=Release',
+            '-DGGML_VULKAN=ON',
+            '-DGGML_NATIVE=OFF',
+            '-DLLAMA_BUILD_TESTS=OFF',
+            '-DLLAMA_BUILD_EXAMPLES=OFF',
+            '-DLLAMA_BUILD_TOOLS=ON',
+            '-DLLAMA_BUILD_SERVER=ON',
+            '-DLLAMA_BUILD_UI=OFF',
+            '-DLLAMA_TOOLS_INSTALL=ON',
+            '-DLLAMA_CURL=OFF'
+          )
+          & cmake @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile llama-cli and llama-server
+        shell: pwsh
+        working-directory: llama.cpp
+        run: |
+          cmake --build build --config Release --target llama-cli llama-server --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Windows binaries
+        shell: pwsh
+        working-directory: llama.cpp
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = Join-Path $env:GITHUB_WORKSPACE 'package'
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          cmake --install build --config Release --prefix $package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @'
+          Platform: Windows x64
+          Backend: Vulkan (GGML_VULKAN=ON)
+          Upstream llama.cpp commit: 7071ba378afa96dcd69c41e1ec2b4912364dbee4
+          Included programs: llama-cli, llama-server
+          GPU runtime validation: not run; GitHub-hosted runner has no Intel Iris Xe GPU
+          Requires a current Intel graphics driver with Vulkan support.
+          Example: llama-server.exe -m model.gguf --host 127.0.0.1 --port 8080 --n-gpu-layers 99
+          '@ | Set-Content -LiteralPath (Join-Path $package 'BUILD.txt') -Encoding utf8
+          $executables = Get-ChildItem -LiteralPath $package -Filter '*.exe' -Recurse
+          $executables | Select-Object FullName,Length | Format-Table -AutoSize
+          if (-not ($executables | Where-Object Name -eq 'llama-cli.exe')) { throw 'llama-cli.exe is missing from the package' }
+          if (-not ($executables | Where-Object Name -eq 'llama-server.exe')) { throw 'llama-server.exe is missing from the package' }
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'llama-windows-x64-vulkan.zip'
+          Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip -CompressionLevel Optimal
+          Get-Item -LiteralPath $zip | Select-Object FullName,Length
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-windows-x64-vulkan
+          path: llama-windows-x64-vulkan.zip
+          if-no-files-found: error
+          retention-days: 14

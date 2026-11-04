@@ -38,10 +38,12 @@ jobs:
               (Join-Path $env:ProgramFiles 'VulkanSDK'),
               (Join-Path ${env:ProgramFiles(x86)} 'VulkanSDK')
             ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-            $sdk = foreach ($root in $sdkRoots) {
-              Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+            $sdkCandidates = @()
+            foreach ($root in $sdkRoots) {
+              $sdkCandidates += Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
                 Where-Object { (Test-Path (Join-Path $_.FullName 'Include\vulkan\vulkan.h')) -and (Test-Path (Join-Path $_.FullName 'Bin\glslc.exe')) }
-            } | Sort-Object Name -Descending | Select-Object -First 1
+            }
+            $sdk = $sdkCandidates | Sort-Object Name -Descending | Select-Object -First 1
             if (-not $sdk) { throw "Vulkan SDK headers and glslc were not found in: $($sdkRoots -join ', ')" }
             $sdkPath = $sdk.FullName
           }

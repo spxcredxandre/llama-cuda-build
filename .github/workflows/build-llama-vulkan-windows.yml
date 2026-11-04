@@ -25,15 +25,24 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $sdkPath = $env:VULKAN_SDK
-          if (-not $sdkPath -or -not (Test-Path (Join-Path $sdkPath 'Include\vulkan\vulkan.h'))) {
+          $sdkValid = $sdkPath -and (Test-Path (Join-Path $sdkPath 'Include\vulkan\vulkan.h')) -and (Test-Path (Join-Path $sdkPath 'Bin\glslc.exe'))
+          if (-not $sdkValid) {
             $installer = Join-Path $env:RUNNER_TEMP 'VulkanSDK-1.4.309.0-Installer.exe'
             $uri = 'https://sdk.lunarg.com/sdk/download/1.4.309.0/windows/VulkanSDK-1.4.309.0-Installer.exe'
             Invoke-WebRequest -Uri $uri -OutFile $installer
             $process = Start-Process -FilePath $installer -ArgumentList @('--accept-licenses', '--default-answer', '--confirm-command', 'install') -Wait -PassThru
             if ($process.ExitCode -ne 0) { throw "Vulkan SDK installation failed with exit code $($process.ExitCode)" }
-            $sdkRoot = Join-Path $env:ProgramFiles 'VulkanSDK'
-            $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
-            if (-not $sdk) { throw "Vulkan SDK was not found under $sdkRoot" }
+
+            $sdkRoots = @(
+              (Join-Path $env:SystemDrive 'VulkanSDK'),
+              (Join-Path $env:ProgramFiles 'VulkanSDK'),
+              (Join-Path ${env:ProgramFiles(x86)} 'VulkanSDK')
+            ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+            $sdk = foreach ($root in $sdkRoots) {
+              Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { (Test-Path (Join-Path $_.FullName 'Include\vulkan\vulkan.h')) -and (Test-Path (Join-Path $_.FullName 'Bin\glslc.exe')) }
+            } | Sort-Object Name -Descending | Select-Object -First 1
+            if (-not $sdk) { throw "Vulkan SDK headers and glslc were not found in: $($sdkRoots -join ', ')" }
             $sdkPath = $sdk.FullName
           }
           if (-not (Test-Path (Join-Path $sdkPath 'Include\vulkan\vulkan.h'))) {

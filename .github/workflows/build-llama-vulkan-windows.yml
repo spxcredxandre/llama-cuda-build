@@ -105,10 +105,19 @@ jobs:
         working-directory: llama.cpp
         run: |
           $ErrorActionPreference = 'Stop'
+          $buildBin = Join-Path (Get-Location) 'build\bin\Release'
           $package = Join-Path $env:GITHUB_WORKSPACE 'package'
           New-Item -ItemType Directory -Force -Path $package | Out-Null
-          cmake --install build --config Release --prefix $package
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          foreach ($name in @('llama-cli.exe', 'llama-server.exe')) {
+            $source = Join-Path $buildBin $name
+            if (-not (Test-Path -LiteralPath $source)) { throw "$name was not found in the build output" }
+            Copy-Item -LiteralPath $source -Destination $package
+          }
+          $runtimeDlls = Get-ChildItem -LiteralPath $buildBin -Filter '*.dll' -File
+          if (-not $runtimeDlls) { throw "No runtime DLLs were found in $buildBin" }
+          $runtimeDlls | Copy-Item -Destination $package
+
           $buildInfo = @'
           Platform: Windows x64
           Backend: Vulkan (GGML_VULKAN=ON)
@@ -119,10 +128,6 @@ jobs:
           Example: llama-server.exe -m model.gguf --host 127.0.0.1 --port 8080 --n-gpu-layers 99
           '@
           $buildInfo | Set-Content -LiteralPath (Join-Path $package 'BUILD.txt') -Encoding utf8
-          $executables = Get-ChildItem -LiteralPath $package -Filter '*.exe' -Recurse
-          $executables | Select-Object FullName,Length | Format-Table -AutoSize
-          if (-not ($executables | Where-Object Name -eq 'llama-cli.exe')) { throw 'llama-cli.exe is missing from the package' }
-          if (-not ($executables | Where-Object Name -eq 'llama-server.exe')) { throw 'llama-server.exe is missing from the package' }
           $zip = Join-Path $env:GITHUB_WORKSPACE 'llama-windows-x64-vulkan.zip'
           Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip -CompressionLevel Optimal
           Get-Item -LiteralPath $zip | Select-Object FullName,Length

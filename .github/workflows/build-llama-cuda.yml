@@ -1,0 +1,87 @@
+name: Build llama.cpp CUDA for Tesla T4
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    container:
+      image: nvidia/cuda:13.0.0-devel-ubuntu24.04
+
+    timeout-minutes: 90
+
+    steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            git cmake ninja-build build-essential \
+            libcurl4-openssl-dev libssl-dev pkg-config
+
+      - name: Checkout llama.cpp
+        shell: bash
+        run: |
+          git clone https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
+          cd /tmp/llama.cpp
+          git checkout 7071ba378
+
+      - name: Verify CUDA
+        shell: bash
+        run: |
+          nvcc --version
+          gcc --version
+
+      - name: Configure CUDA build
+        shell: bash
+        run: |
+          cd /tmp/llama.cpp
+
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=75 \
+            -DGGML_CCACHE=OFF \
+            -DLLAMA_CURL=OFF
+
+      - name: Compile
+        shell: bash
+        run: |
+          cd /tmp/llama.cpp
+          cmake --build build --parallel 4
+
+      - name: Package
+        shell: bash
+        run: |
+          cd /tmp/llama.cpp
+
+          mkdir -p /tmp/package/llama-cuda
+
+          cmake --install build \
+            --prefix /tmp/package/llama-cuda
+
+          git rev-parse HEAD > /tmp/package/llama-cuda/COMMIT
+
+          cat > /tmp/package/llama-cuda/BUILD.txt <<'EOF'
+          Platform: Linux x86_64
+          CUDA Toolkit: 13.0
+          CUDA Architecture: 75
+          Build: Release
+          EOF
+
+          find /tmp/package/llama-cuda -type f -print
+
+          cd /tmp/package
+          tar -czf llama-linux-x86_64-cuda13-sm75.tar.gz llama-cuda
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-linux-x86_64-cuda13-sm75
+          path: /tmp/package/llama-linux-x86_64-cuda13-sm75.tar.gz
+          retention-days: 14

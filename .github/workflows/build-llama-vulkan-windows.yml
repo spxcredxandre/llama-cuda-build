@@ -26,8 +26,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $sdkPath = $env:VULKAN_SDK
           if (-not $sdkPath -or -not (Test-Path (Join-Path $sdkPath 'Include\vulkan\vulkan.h'))) {
-            winget install --id KhronosGroup.VulkanSDK --version 1.4.309.0 --exact --silent --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -ne 0) { throw "Vulkan SDK installation failed with exit code $LASTEXITCODE" }
+            $installer = Join-Path $env:RUNNER_TEMP 'VulkanSDK-1.4.309.0-Installer.exe'
+            $uri = 'https://sdk.lunarg.com/sdk/download/1.4.309.0/windows/VulkanSDK-1.4.309.0-Installer.exe'
+            Invoke-WebRequest -Uri $uri -OutFile $installer
+            $process = Start-Process -FilePath $installer -ArgumentList @('--accept-licenses', '--default-answer', '--confirm-command', 'install') -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Vulkan SDK installation failed with exit code $($process.ExitCode)" }
             $sdkRoot = Join-Path $env:ProgramFiles 'VulkanSDK'
             $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
             if (-not $sdk) { throw "Vulkan SDK was not found under $sdkRoot" }
@@ -48,7 +51,7 @@ jobs:
         working-directory: llama.cpp
         run: |
           $ErrorActionPreference = 'Stop'
-          $args = @(
+          $cmakeArgs = @(
             '-S', '.',
             '-B', 'build',
             '-G', 'Visual Studio 17 2022',
@@ -64,7 +67,7 @@ jobs:
             '-DLLAMA_TOOLS_INSTALL=ON',
             '-DLLAMA_CURL=OFF'
           )
-          & cmake @args
+          & cmake @cmakeArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Compile llama-cli and llama-server
@@ -83,7 +86,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $package | Out-Null
           cmake --install build --config Release --prefix $package
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          @'
+          $buildInfo = @'
           Platform: Windows x64
           Backend: Vulkan (GGML_VULKAN=ON)
           Upstream llama.cpp commit: 7071ba378afa96dcd69c41e1ec2b4912364dbee4
@@ -91,7 +94,8 @@ jobs:
           GPU runtime validation: not run; GitHub-hosted runner has no Intel Iris Xe GPU
           Requires a current Intel graphics driver with Vulkan support.
           Example: llama-server.exe -m model.gguf --host 127.0.0.1 --port 8080 --n-gpu-layers 99
-          '@ | Set-Content -LiteralPath (Join-Path $package 'BUILD.txt') -Encoding utf8
+          '@
+          $buildInfo | Set-Content -LiteralPath (Join-Path $package 'BUILD.txt') -Encoding utf8
           $executables = Get-ChildItem -LiteralPath $package -Filter '*.exe' -Recurse
           $executables | Select-Object FullName,Length | Format-Table -AutoSize
           if (-not ($executables | Where-Object Name -eq 'llama-cli.exe')) { throw 'llama-cli.exe is missing from the package' }

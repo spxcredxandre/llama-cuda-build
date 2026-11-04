@@ -37,6 +37,13 @@ jobs:
           nvcc --version
           gcc --version
 
+      - name: Prepare CUDA driver stub for linking
+        shell: bash
+        run: |
+          test -f /usr/local/cuda/lib64/stubs/libcuda.so
+          ln -sf libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+          test -e /usr/local/cuda/lib64/stubs/libcuda.so.1
+
       - name: Configure CUDA build
         shell: bash
         run: |
